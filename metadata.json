@@ -1,0 +1,5 @@
+{
+  "name": "Kya Karoon Music Player",
+  "description": "A minimalist music player app featuring a horizontal audio waveform progress bar and standard controls.",
+  "requestFramePermissions": []
+}
