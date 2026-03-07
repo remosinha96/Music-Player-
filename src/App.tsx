@@ -4,35 +4,20 @@
  */
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Play, Pause, SkipBack, SkipForward, Upload, Video, X, Loader2 } from 'lucide-react';
+import { Play, Pause, Upload, Video, Loader2, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
-// Custom Waveform Icon
-const CentralWaveIcon = ({ isPlaying, color = "currentColor" }: { isPlaying: boolean, color?: string }) => (
-  <motion.svg
-    viewBox="0 0 200 100"
-    className="w-48 h-24"
-    style={{ color }}
-    animate={{ scale: isPlaying ? [1, 1.02, 1] : 1 }}
-    transition={{ repeat: Infinity, duration: 2, ease: "easeInOut" }}
-  >
-    <path
-      d="M10 50 H40 L55 20 L70 80 L85 10 L100 90 L115 20 L130 80 L145 40 L160 50 H190"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-  </motion.svg>
-);
+// --- Constants ---
+const WAVEFORM_BARS = 60;
+const CANVAS_WIDTH = 1080;
+const CANVAS_HEIGHT = 1920;
 
-const FOOTER_WAVEFORM_BARS = 100;
-const generateFooterWaveform = () => {
-  return Array.from({ length: FOOTER_WAVEFORM_BARS }, () => Math.random() * 0.6 + 0.2);
+const generateStaticWaveform = () => {
+  return Array.from({ length: WAVEFORM_BARS }, () => Math.random() * 0.6 + 0.2);
 };
 
 export default function App() {
+  // --- State ---
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -41,22 +26,21 @@ export default function App() {
   const [isRecording, setIsRecording] = useState(false);
   const [recordingProgress, setRecordingProgress] = useState(0);
   const [isBuffering, setIsBuffering] = useState(false);
-  
+
+  // --- Refs ---
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const footerWaveform = useMemo(() => generateFooterWaveform(), []);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const staticWaveform = useMemo(() => generateStaticWaveform(), []);
+  
+  // Audio Engine Refs
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const audioDestinationRef = useRef<MediaStreamAudioDestinationNode | null>(null);
+  const masterGainRef = useRef<GainNode | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
 
-  // Audio Engineering Refs
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const audioSourceRef = useRef<MediaElementAudioSourceNode | null>(null);
-  const audioDestinationRef = useRef<MediaStreamAudioDestinationNode | null>(null);
-  const compressorRef = useRef<DynamicsCompressorNode | null>(null);
-  const masterGainRef = useRef<GainNode | null>(null);
-
-  // Initialize Audio Engine with High Fidelity Settings
+  // --- Audio Engine Initialization ---
   const initAudioEngine = () => {
     if (audioContextRef.current) return;
 
@@ -65,87 +49,54 @@ export default function App() {
       latencyHint: 'playback',
       sampleRate: 44100,
     });
-
+    
     const source = ctx.createMediaElementSource(audioRef.current!);
     const destination = ctx.createMediaStreamDestination();
-    const compressor = ctx.createDynamicsCompressor();
     const masterGain = ctx.createGain();
-
-    // Professional Compression Settings
-    compressor.threshold.setValueAtTime(-24, ctx.currentTime);
-    compressor.knee.setValueAtTime(30, ctx.currentTime);
-    compressor.ratio.setValueAtTime(12, ctx.currentTime);
-    compressor.attack.setValueAtTime(0.003, ctx.currentTime);
-    compressor.release.setValueAtTime(0.25, ctx.currentTime);
-
-    source.connect(compressor);
-    compressor.connect(destination);
-    compressor.connect(masterGain);
+    
+    source.connect(masterGain);
+    masterGain.connect(destination);
     masterGain.connect(ctx.destination);
 
     audioContextRef.current = ctx;
-    audioSourceRef.current = source;
     audioDestinationRef.current = destination;
-    compressorRef.current = compressor;
     masterGainRef.current = masterGain;
   };
 
+  // --- Effects ---
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
 
     const handleTimeUpdate = () => {
       setCurrentTime(audio.currentTime);
-      
-      if (isRecording) {
+      if (isRecording && audio.duration) {
         setRecordingProgress((audio.currentTime / audio.duration) * 100);
       }
     };
 
-    const handleWaiting = () => setIsBuffering(true);
-    const handlePlaying = () => setIsBuffering(false);
-    const handleCanPlay = () => setIsBuffering(false);
-    const handleLoadedMetadata = () => {
-      setDuration(audio.duration);
-      setIsBuffering(false);
-    };
-
-    const handleError = () => {
-      setIsBuffering(false);
-      setIsPlaying(false);
-      console.error("Audio error occurred");
-    };
-
+    const handleLoadedMetadata = () => setDuration(audio.duration);
     const handleEnded = () => {
       setIsPlaying(false);
-      if (isRecording) stopVideoRecording();
+      if (isRecording) stopRecording();
     };
+    const handleWaiting = () => setIsBuffering(true);
+    const handlePlaying = () => setIsBuffering(false);
 
     audio.addEventListener('timeupdate', handleTimeUpdate);
-    audio.addEventListener('waiting', handleWaiting);
-    audio.addEventListener('playing', handlePlaying);
-    audio.addEventListener('canplay', handleCanPlay);
     audio.addEventListener('loadedmetadata', handleLoadedMetadata);
     audio.addEventListener('ended', handleEnded);
-    audio.addEventListener('error', handleError);
+    audio.addEventListener('waiting', handleWaiting);
+    audio.addEventListener('playing', handlePlaying);
 
     return () => {
       audio.removeEventListener('timeupdate', handleTimeUpdate);
-      audio.removeEventListener('waiting', handleWaiting);
-      audio.removeEventListener('playing', handlePlaying);
-      audio.removeEventListener('canplay', handleCanPlay);
       audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
       audio.removeEventListener('ended', handleEnded);
-      audio.removeEventListener('error', handleError);
+      audio.removeEventListener('waiting', handleWaiting);
+      audio.removeEventListener('playing', handlePlaying);
     };
   }, [isRecording]);
-
-  useEffect(() => {
-    if (isBuffering) {
-      const timer = setTimeout(() => setIsBuffering(false), 5000);
-      return () => clearTimeout(timer);
-    }
-  }, [isBuffering]);
 
   useEffect(() => {
     if (isPlaying) {
@@ -159,10 +110,10 @@ export default function App() {
     }
   }, [isPlaying]);
 
+  // --- Handlers ---
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      setIsBuffering(true);
       const url = URL.createObjectURL(file);
       if (audioRef.current) {
         audioRef.current.src = url;
@@ -172,24 +123,25 @@ export default function App() {
     }
   };
 
-  const handleSeek = (e: React.MouseEvent) => {
+  const handleSeek = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!audioRef.current || duration === 0 || isRecording) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
-    const newProgress = x / rect.width;
-    audioRef.current.currentTime = newProgress * duration;
+    const percent = x / rect.width;
+    audioRef.current.currentTime = percent * duration;
   };
 
-  const drawFrame = (ctx: CanvasRenderingContext2D, width: number, height: number, time: number, totalDuration: number) => {
-    // 1. Background - Solid Black
+  // --- Drawing Logic ---
+  const drawFrame = (ctx: CanvasRenderingContext2D, time: number) => {
+    // 1. Background
     ctx.fillStyle = '#000000';
-    ctx.fillRect(0, 0, width, height);
+    ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
 
-    const progress = totalDuration > 0 ? time / totalDuration : 0;
+    const progress = duration > 0 ? time / duration : 0;
 
-    // 2. Central Icon - Optimized Stroke
+    // 2. Center Icon (Waveform)
     ctx.save();
-    ctx.translate(width / 2, height * 0.35);
+    ctx.translate(CANVAS_WIDTH / 2, CANVAS_HEIGHT * 0.35);
     const pulse = isPlaying ? 1 + Math.sin(Date.now() / 300) * 0.015 : 1;
     ctx.scale(pulse * 2.5, pulse * 2.5);
     ctx.strokeStyle = '#3f3f46';
@@ -204,52 +156,50 @@ export default function App() {
     ctx.stroke();
     ctx.restore();
 
-    // 3. Typography
+    // 3. Song Title
     ctx.fillStyle = '#ffffff';
     ctx.font = 'bold 120px Anton';
     ctx.textAlign = 'center';
     ctx.letterSpacing = '-2px';
-    ctx.fillText(songTitle, width / 2, height * 0.55);
+    ctx.fillText(songTitle, CANVAS_WIDTH / 2, CANVAS_HEIGHT * 0.55);
 
     ctx.fillStyle = '#71717a';
     ctx.font = 'bold 24px Space Grotesk';
     ctx.letterSpacing = '8px';
-    ctx.fillText(artistName, width / 2, height * 0.60);
+    ctx.fillText(artistName, CANVAS_WIDTH / 2, CANVAS_HEIGHT * 0.60);
 
-    // 4. Waveform Progress - Optimized Rendering
-    const footerY = height * 0.85;
-    const footerHeight = 120;
-    const barGap = 4;
-    const barWidth = (width - 160 - (FOOTER_WAVEFORM_BARS - 1) * barGap) / FOOTER_WAVEFORM_BARS;
-    
+    // 4. Bottom Waveform
+    const footerY = CANVAS_HEIGHT * 0.8;
+    const footerH = 120;
+    const padding = 100;
+    const availableW = CANVAS_WIDTH - (padding * 2);
+    const barW = availableW / WAVEFORM_BARS - 4;
+
     ctx.save();
-    ctx.translate(80, footerY);
-    footerWaveform.forEach((h, i) => {
-      const barProgress = i / FOOTER_WAVEFORM_BARS;
-      ctx.fillStyle = barProgress <= progress ? '#ffffff' : '#18181b';
-      const bh = h * footerHeight;
+    ctx.translate(padding, footerY);
+    staticWaveform.forEach((h, i) => {
+      const barProgress = i / WAVEFORM_BARS;
+      ctx.fillStyle = barProgress <= progress ? '#ffffff' : '#27272a';
+      const bh = h * footerH;
       ctx.beginPath();
-      ctx.roundRect(i * (barWidth + barGap), (footerHeight - bh) / 2, barWidth, bh, 4);
+      ctx.roundRect(i * (barW + 4), (footerH - bh) / 2, barW, bh, 4);
       ctx.fill();
     });
     ctx.restore();
 
-    // 5. Playhead
-    ctx.fillStyle = '#52525b';
-    ctx.fillRect(80 + progress * (width - 160), footerY, 3, footerHeight);
-
-    // 6. Timestamps - High Contrast
+    // 5. Timestamps
     ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 32px Space Grotesk';
+    ctx.font = 'bold 36px Inter';
     ctx.textAlign = 'left';
-    ctx.fillText(formatTime(time), 80, footerY + footerHeight + 60);
+    ctx.fillText(formatTime(time), padding, footerY + footerH + 80);
     ctx.textAlign = 'right';
-    ctx.fillText(formatTime(totalDuration), width - 80, footerY + footerHeight + 60);
+    ctx.fillText(formatTime(duration), CANVAS_WIDTH - padding, footerY + footerH + 80);
   };
 
-  const startVideoRecording = async () => {
+  // --- Recording Logic ---
+  const startRecording = async () => {
     if (!audioRef.current || duration === 0) return;
-    
+
     initAudioEngine();
     setIsRecording(true);
     setRecordingProgress(0);
@@ -258,79 +208,77 @@ export default function App() {
       await audioContextRef.current.resume();
     }
 
-    // Mute speakers during export so user doesn't hear it
-    if (masterGainRef.current) {
-      masterGainRef.current.gain.setValueAtTime(0, audioContextRef.current!.currentTime);
-    }
-
     audioRef.current.currentTime = 0;
     const canvas = canvasRef.current!;
     const ctx = canvas.getContext('2d', { alpha: false })!;
-    
+
+    // 1. Force a "Warm-up" draw to ensure the canvas is active
+    drawFrame(ctx, 0);
+
+    // 2. Capture stream (30 FPS is safer for mobile encoders)
     const canvasStream = canvas.captureStream(30); 
     const audioStream = audioDestinationRef.current!.stream;
-    
+
     const combinedStream = new MediaStream([
-      ...canvasStream.getVideoTracks(),
-      ...audioStream.getAudioTracks()
+      canvasStream.getVideoTracks()[0],
+      audioStream.getAudioTracks()[0]
     ]);
 
-    const getSupportedMimeType = () => {
+    const getMimeType = () => {
+      // Priority list for mobile compatibility
       const types = [
+        'video/webm;codecs=vp8,opus', // Most stable on Android/Brave
+        'video/webm;codecs=h264,opus',
         'video/mp4;codecs=h264,aac',
-        'video/mp4;codecs=h264',
-        'video/mp4',
-        'video/webm;codecs=vp9,opus',
-        'video/webm;codecs=vp8,opus',
         'video/webm'
       ];
-      return types.find(type => MediaRecorder.isTypeSupported(type)) || 'video/webm';
+      for (const t of types) {
+        if (MediaRecorder.isTypeSupported(t)) return t;
+      }
+      return '';
     };
 
-    const mimeType = getSupportedMimeType();
-    const extension = mimeType.includes('mp4') ? 'mp4' : 'webm';
+    const mimeType = getMimeType();
+    // We use .mp4 extension for the user, but encode with the most stable codec
+    const extension = 'mp4'; 
 
     const recorder = new MediaRecorder(combinedStream, {
-      mimeType,
-      videoBitsPerSecond: 5000000 
+      mimeType: mimeType || undefined,
+      videoBitsPerSecond: 5000000 // 5Mbps is stable for mobile
     });
 
     chunksRef.current = [];
     recorder.ondataavailable = (e) => {
       if (e.data.size > 0) chunksRef.current.push(e.data);
     };
-    
+
     recorder.onstop = () => {
-      // Restore volume after export
-      if (masterGainRef.current && audioContextRef.current) {
-        masterGainRef.current.gain.setValueAtTime(1, audioContextRef.current.currentTime);
-      }
-      
-      const blob = new Blob(chunksRef.current, { type: mimeType });
+      const blob = new Blob(chunksRef.current, { type: mimeType || 'video/mp4' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
-      link.download = `${songTitle.toLowerCase()}-reel.${extension}`;
+      link.download = `${songTitle.toLowerCase()}.${extension}`;
       link.href = url;
       link.click();
+      
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
       setIsRecording(false);
     };
 
     mediaRecorderRef.current = recorder;
-    
-    // Start immediately for faster response
-    recorder.start(200); 
+    recorder.start();
     setIsPlaying(true);
 
-    const renderLoop = () => {
+    // Render loop for recording
+    const render = () => {
       if (mediaRecorderRef.current?.state === 'recording') {
-        drawFrame(ctx, canvas.width, canvas.height, audioRef.current?.currentTime || 0, duration);
-        requestAnimationFrame(renderLoop);
+        drawFrame(ctx, audioRef.current?.currentTime || 0);
+        requestAnimationFrame(render);
       }
     };
-    renderLoop();
+    render();
   };
 
-  const stopVideoRecording = () => {
+  const stopRecording = () => {
     if (mediaRecorderRef.current?.state === 'recording') {
       mediaRecorderRef.current.stop();
       setIsPlaying(false);
@@ -347,50 +295,53 @@ export default function App() {
   const progress = duration > 0 ? currentTime / duration : 0;
 
   return (
-    <div className="min-h-screen bg-black text-white flex flex-col items-center justify-between select-none overflow-hidden font-sans">
-      <audio ref={audioRef} className="hidden" crossOrigin="anonymous" />
+    <div className="min-h-screen bg-black text-white flex flex-col items-center justify-between font-sans select-none overflow-hidden">
+      {/* Hidden Elements */}
+      <audio ref={audioRef} crossOrigin="anonymous" />
       <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="audio/*" className="hidden" />
-      <canvas ref={canvasRef} width={1080} height={1920} className="hidden" />
+      <canvas ref={canvasRef} width={CANVAS_WIDTH} height={CANVAS_HEIGHT} className="hidden" />
 
       {/* Recording Overlay */}
       <AnimatePresence>
         {isRecording && (
           <motion.div 
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black/95 z-[100] flex flex-col items-center justify-center space-y-8 p-12 text-center"
+            className="fixed inset-0 bg-black z-[100] flex flex-col items-center justify-center space-y-8"
           >
-            <Loader2 className="w-16 h-16 text-white animate-spin" />
-            <div className="space-y-2">
-              <h2 className="text-2xl font-display uppercase tracking-widest">Mastering Export</h2>
-              <p className="text-zinc-500 font-mono text-xs uppercase tracking-widest">High Fidelity Audio | 1080p 30FPS</p>
+            <Loader2 className="w-12 h-12 animate-spin text-white" />
+            <div className="text-center space-y-2">
+              <h2 className="text-xl font-bold uppercase tracking-widest">Exporting Video</h2>
+              <p className="text-zinc-500 text-xs uppercase font-mono">Please do not close this tab</p>
             </div>
-            <div className="w-full max-w-xs bg-zinc-900 h-1 rounded-full overflow-hidden">
+            <div className="w-64 bg-zinc-900 h-1 rounded-full overflow-hidden">
               <motion.div className="h-full bg-white" initial={{ width: 0 }} animate={{ width: `${recordingProgress}%` }} />
             </div>
-            <button onClick={stopVideoRecording} className="px-8 py-3 bg-zinc-800 hover:bg-zinc-700 rounded-full text-xs font-mono uppercase tracking-widest flex items-center space-x-2">
-              <X size={14} /> <span>Cancel</span>
+            <button onClick={stopRecording} className="px-6 py-2 bg-zinc-800 rounded-full text-[10px] font-bold uppercase tracking-widest flex items-center space-x-2">
+              <X size={12} /> <span>Cancel</span>
             </button>
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* Top Menu */}
-      <div className="w-full px-6 py-4 flex justify-between items-center z-50">
-        <button onClick={() => fileInputRef.current?.click()} className="flex items-center space-x-2 text-zinc-500 hover:text-white transition-colors text-xs font-mono tracking-widest uppercase">
+      {/* Header */}
+      <div className="w-full px-6 py-8 flex justify-between items-center z-50">
+        <button onClick={() => fileInputRef.current?.click()} className="flex items-center space-x-2 text-zinc-500 hover:text-white transition-colors text-[10px] font-bold tracking-widest uppercase">
           <Upload size={14} /> <span>Load MP3</span>
         </button>
-        <button onClick={startVideoRecording} disabled={duration === 0} className="flex items-center space-x-2 text-zinc-500 hover:text-white transition-colors text-xs font-mono tracking-widest uppercase disabled:opacity-30">
+        <button onClick={startRecording} disabled={duration === 0 || isRecording} className="flex items-center space-x-2 text-zinc-500 hover:text-white transition-colors text-[10px] font-bold tracking-widest uppercase disabled:opacity-20">
           <Video size={14} /> <span>Export Reel</span>
         </button>
       </div>
 
-      {/* Main UI */}
+      {/* Main Visualizer */}
       <div className="flex-1 w-full flex flex-col items-center justify-between">
         <div className="flex-1 flex flex-col items-center justify-center space-y-16 w-full mt-10">
           <motion.div animate={{ scale: isPlaying ? [1, 1.02, 1] : 1 }} transition={{ repeat: Infinity, duration: 2 }}>
-            <CentralWaveIcon isPlaying={isPlaying} color="#27272a" />
+            <svg viewBox="0 0 200 100" className="w-48 h-24 text-zinc-800">
+              <path d="M10 50 H40 L55 20 L70 80 L85 10 L100 90 L115 20 L130 80 L145 40 L160 50 H190" fill="none" stroke="currentColor" strokeWidth="5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
           </motion.div>
-
+          
           <div className="text-center space-y-2">
             <h1 className="font-display text-5xl tracking-tight distressed-text uppercase">{songTitle}</h1>
             <input
@@ -400,29 +351,26 @@ export default function App() {
             />
           </div>
         </div>
+      </div>
 
-        {/* Controls */}
-        <div className="py-8 flex items-center justify-center space-x-12">
-          <button className="text-zinc-800 hover:text-zinc-600 transition-colors"><SkipBack size={28} /></button>
-          <button onClick={() => setIsPlaying(!isPlaying)} className="w-16 h-16 rounded-full bg-white flex items-center justify-center text-black hover:scale-105 transition-all">
-            {isBuffering ? <Loader2 className="animate-spin" size={24} /> : (isPlaying ? <Pause size={24} fill="currentColor" /> : <Play size={24} fill="currentColor" className="ml-1" />)}
+      {/* Controls & Progress */}
+      <div className="w-full pb-20 px-8 space-y-12">
+        <div className="flex items-center justify-center">
+          <button onClick={() => setIsPlaying(!isPlaying)} className="w-20 h-20 rounded-full bg-white flex items-center justify-center text-black hover:scale-105 transition-transform">
+            {isBuffering ? <Loader2 className="animate-spin" size={28} /> : (isPlaying ? <Pause size={28} fill="currentColor" /> : <Play size={28} fill="currentColor" className="ml-1" />)}
           </button>
-          <button className="text-zinc-800 hover:text-zinc-600 transition-colors"><SkipForward size={28} /></button>
         </div>
 
-        {/* Footer Waveform */}
-        <div className="w-full bg-black border-t border-zinc-900 pt-6 pb-12 px-8">
-          <div className="max-w-xl mx-auto space-y-4">
-            <div className="flex items-center justify-between h-12 gap-[1px] cursor-pointer relative" onClick={handleSeek}>
-              <div className="absolute top-0 bottom-0 w-[2px] bg-white z-10 shadow-[0_0_10px_rgba(255,255,255,0.5)]" style={{ left: `${progress * 100}%` }} />
-              {footerWaveform.map((h, i) => (
-                <div key={i} style={{ height: `${h * 100}%`, backgroundColor: (i / FOOTER_WAVEFORM_BARS) <= progress ? '#ffffff' : '#18181b' }} className="flex-1 rounded-sm" />
-              ))}
-            </div>
-            <div className="flex justify-between font-mono text-[10px] tracking-widest text-zinc-500 font-bold px-1">
-              <span>{formatTime(currentTime)}</span>
-              <span>{formatTime(duration)}</span>
-            </div>
+        <div className="max-w-2xl mx-auto space-y-6">
+          <div className="flex items-center justify-between h-16 gap-[2px] cursor-pointer relative" onClick={handleSeek}>
+            <div className="absolute top-0 bottom-0 w-[2px] bg-white z-10" style={{ left: `${progress * 100}%` }} />
+            {staticWaveform.map((h, i) => (
+              <div key={i} style={{ height: `${h * 100}%`, backgroundColor: (i / WAVEFORM_BARS) <= progress ? '#ffffff' : '#18181b' }} className="flex-1 rounded-full" />
+            ))}
+          </div>
+          <div className="flex justify-between font-mono text-xs tracking-widest text-zinc-500 font-bold">
+            <span>{formatTime(currentTime)}</span>
+            <span>{formatTime(duration)}</span>
           </div>
         </div>
       </div>
