@@ -8,7 +8,7 @@ import { Play, Pause, Upload, Video, Loader2, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 // --- Constants ---
-const WAVEFORM_BARS = 60;
+const WAVEFORM_BARS = 100;
 const CANVAS_WIDTH = 1080;
 const CANVAS_HEIGHT = 1920;
 
@@ -25,6 +25,7 @@ export default function App() {
   const [artistName, setArtistName] = useState('ZAALIMA RECORDS');
   const [isRecording, setIsRecording] = useState(false);
   const [recordingProgress, setRecordingProgress] = useState(0);
+  const [smoothTime, setSmoothTime] = useState(0);
   const [isBuffering, setIsBuffering] = useState(false);
 
   // --- Refs ---
@@ -39,6 +40,19 @@ export default function App() {
   const masterGainRef = useRef<GainNode | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+
+  // Smooth Time Tracking
+  useEffect(() => {
+    let rafId: number;
+    const update = () => {
+      if (audioRef.current && isPlaying && !isRecording) {
+        setSmoothTime(audioRef.current.currentTime);
+      }
+      rafId = requestAnimationFrame(update);
+    };
+    rafId = requestAnimationFrame(update);
+    return () => cancelAnimationFrame(rafId);
+  }, [isPlaying, isRecording]);
 
   // --- Audio Engine Initialization ---
   const initAudioEngine = () => {
@@ -70,6 +84,7 @@ export default function App() {
 
     const handleTimeUpdate = () => {
       setCurrentTime(audio.currentTime);
+      if (!isPlaying) setSmoothTime(audio.currentTime); // Sync on pause/seek
       if (isRecording && audio.duration) {
         setRecordingProgress((audio.currentTime / audio.duration) * 100);
       }
@@ -169,27 +184,40 @@ export default function App() {
     ctx.fillText(artistName, CANVAS_WIDTH / 2, CANVAS_HEIGHT * 0.60);
 
     // 4. Bottom Waveform
-    const footerY = CANVAS_HEIGHT * 0.8;
-    const footerH = 120;
-    const padding = 100;
+    const footerY = CANVAS_HEIGHT * 0.82;
+    const footerH = 100;
+    const padding = 120;
     const availableW = CANVAS_WIDTH - (padding * 2);
-    const barW = availableW / WAVEFORM_BARS - 4;
+    const barGap = 2;
+    const barW = (availableW - (WAVEFORM_BARS - 1) * barGap) / WAVEFORM_BARS;
 
     ctx.save();
     ctx.translate(padding, footerY);
     staticWaveform.forEach((h, i) => {
       const barProgress = i / WAVEFORM_BARS;
-      ctx.fillStyle = barProgress <= progress ? '#ffffff' : '#27272a';
+      // Match UI colors exactly
+      ctx.fillStyle = barProgress <= progress ? '#ffffff' : '#18181b';
       const bh = h * footerH;
       ctx.beginPath();
-      ctx.roundRect(i * (barW + 4), (footerH - bh) / 2, barW, bh, 4);
+      // Match UI rounding (full rounded)
+      ctx.roundRect(i * (barW + barGap), (footerH - bh) / 2, barW, bh, 10);
       ctx.fill();
     });
+
+    // 5. Playhead Line (The white vertical line from UI)
+    ctx.fillStyle = '#ffffff';
+    const playheadX = progress * availableW;
+    ctx.fillRect(playheadX, -10, 3, footerH + 20);
+    // Add a subtle glow to the playhead for smoothness
+    ctx.shadowBlur = 15;
+    ctx.shadowColor = 'rgba(255, 255, 255, 0.5)';
+    ctx.fillRect(playheadX, -10, 3, footerH + 20);
+    ctx.shadowBlur = 0;
     ctx.restore();
 
-    // 5. Timestamps
+    // 6. Timestamps
     ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 36px Inter';
+    ctx.font = 'bold 32px Space Grotesk';
     ctx.textAlign = 'left';
     ctx.fillText(formatTime(time), padding, footerY + footerH + 80);
     ctx.textAlign = 'right';
@@ -268,10 +296,24 @@ export default function App() {
     recorder.start();
     setIsPlaying(true);
 
-    // Render loop for recording
+    // Render loop for recording with smooth interpolation
+    let lastAudioTime = 0;
+    let lastPerfTime = performance.now();
+
     const render = () => {
       if (mediaRecorderRef.current?.state === 'recording') {
-        drawFrame(ctx, audioRef.current?.currentTime || 0);
+        const now = performance.now();
+        let currentAudioTime = audioRef.current?.currentTime || 0;
+        
+        // Smooth interpolation between audio clock ticks
+        if (currentAudioTime !== lastAudioTime) {
+          lastAudioTime = currentAudioTime;
+          lastPerfTime = now;
+        } else {
+          currentAudioTime += (now - lastPerfTime) / 1000;
+        }
+
+        drawFrame(ctx, Math.min(currentAudioTime, duration));
         requestAnimationFrame(render);
       }
     };
@@ -362,14 +404,14 @@ export default function App() {
         </div>
 
         <div className="max-w-2xl mx-auto space-y-6">
-          <div className="flex items-center justify-between h-16 gap-[2px] cursor-pointer relative" onClick={handleSeek}>
-            <div className="absolute top-0 bottom-0 w-[2px] bg-white z-10" style={{ left: `${progress * 100}%` }} />
+          <div className="flex items-center justify-between h-16 gap-[1px] cursor-pointer relative" onClick={handleSeek}>
+            <div className="absolute top-0 bottom-0 w-[2px] bg-white z-10 shadow-[0_0_10px_rgba(255,255,255,0.5)]" style={{ left: `${(smoothTime / duration) * 100}%` }} />
             {staticWaveform.map((h, i) => (
-              <div key={i} style={{ height: `${h * 100}%`, backgroundColor: (i / WAVEFORM_BARS) <= progress ? '#ffffff' : '#18181b' }} className="flex-1 rounded-full" />
+              <div key={i} style={{ height: `${h * 100}%`, backgroundColor: (i / WAVEFORM_BARS) <= (smoothTime / duration) ? '#ffffff' : '#18181b' }} className="flex-1 rounded-full" />
             ))}
           </div>
           <div className="flex justify-between font-mono text-xs tracking-widest text-zinc-500 font-bold">
-            <span>{formatTime(currentTime)}</span>
+            <span>{formatTime(smoothTime)}</span>
             <span>{formatTime(duration)}</span>
           </div>
         </div>
